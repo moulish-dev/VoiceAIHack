@@ -10,58 +10,74 @@ API_KEY  = os.getenv("THYMIA_API_KEY")
 BASE_URL = "https://api.thymia.ai"
 HEADERS  = {"x-api-key": API_KEY, "Content-Type": "application/json"}
 
-# ── STEP 1: Create model run ─────────────────────────────────────────────────
-payload = {
-    "user": {
-        "userLabel": "test-user-001",
-        "dateOfBirth": "1995-01-01",
-        "birthSex": "MALE"
-    },
-    "language": "en-GB"
-}
+AUDIO_FOLDER = "audio_files"
 
-resp         = requests.post(f"{BASE_URL}/v1/models/mental-wellness", json=payload, headers=HEADERS)
-resp_json    = resp.json()
-model_run_id = resp_json["id"]
-upload_url   = resp_json["recordingUploadUrl"]
-print("STEP 1 - Run created:", model_run_id)
+def process_audio(audio_path):
+    # Step 1: Create run
+    payload = {
+        "user": {
+            "userLabel": "test-user-001",
+            "dateOfBirth": "1995-01-01",
+            "birthSex": "MALE"
+        },
+        "language": "en-GB"
+    }
+    resp         = requests.post(f"{BASE_URL}/v1/models/mental-wellness", json=payload, headers=HEADERS)
+    resp_json    = resp.json()
+    model_run_id = resp_json["id"]
+    upload_url   = resp_json["recordingUploadUrl"]
+    print(f"  Run created: {model_run_id}")
 
-# ── STEP 2: Upload audio ──────────────────────────────────────────────────────
-AUDIO_FILE = "thymia/speaker.wav"
-with open(AUDIO_FILE, "rb") as f:
-    upload_resp = requests.put(upload_url, data=f)
-print("STEP 2 - Upload status:", upload_resp.status_code)
+    # Step 2: Upload
+    with open(audio_path, "rb") as f:
+        requests.put(upload_url, data=f)
+    print(f"  Uploaded: {audio_path}")
 
-# ── STEP 3: Poll for results ──────────────────────────────────────────────────
-print("STEP 3 - Polling...")
-for attempt in range(20):
-    time.sleep(5)
-    result = requests.get(
-        f"{BASE_URL}/v1/models/mental-wellness/{model_run_id}",
-        headers=HEADERS
-    ).json()
+    # Step 3: Poll
+    for attempt in range(20):
+        time.sleep(5)
+        result = requests.get(
+            f"{BASE_URL}/v1/models/mental-wellness/{model_run_id}",
+            headers=HEADERS
+        ).json()
+        status = result["status"]
+        print(f"  [{attempt+1}] {status}")
+        if status == "COMPLETE_OK":
+            return result
+        elif status == "COMPLETE_ERROR":
+            print("❌ Error:", result.get("errorCode"))
+            return None
+    return None
 
-    status = result["status"]
-    print(f"  [{attempt+1}] Status: {status}")
+# ── MAIN: process all audio files in folder ──────────────────────────────────
+audio_files = sorted([
+    f for f in os.listdir(AUDIO_FOLDER)
+    if f.endswith((".wav", ".mp3", ".mp4", ".ogg", ".webm", ".flac"))
+])
 
-    if status == "COMPLETE_OK":
-        with open("thymia_result.json", "w") as f:
-            json.dump(result, f, indent=2)
-        print("💾 Raw result saved to thymia_result.json")
+print(f"Found {len(audio_files)} audio files\n")
 
-        # ── STEP 4: Extract + save session ───────────────────────────────
+sessions = load_sessions()
+
+for audio_file in audio_files:
+    print(f"\n🎙️ Processing: {audio_file}")
+    path   = os.path.join(AUDIO_FOLDER, audio_file)
+    result = process_audio(path)
+
+    if result:
         session  = extract_session(result)
-        sessions = load_sessions()
         sessions.append(session)
         save_sessions(sessions)
-        print(f"📊 Session saved ({len(sessions)} total)")
 
-        # ── STEP 5: Drift analysis ────────────────────────────────────────
+        print(f"\n📊 Biomarkers for {audio_file}:")
+        print(f"  distress:    {session['distress']:.2f}")
+        print(f"  stress:      {session['stress']:.2f}")
+        print(f"  exhaustion:  {session['exhaustion']:.2f}")
+        print(f"  sleep:       {session['sleep']:.2f}")
+        print(f"  selfEsteem:  {session['selfEsteem']:.2f}")
+        print(f"  mentalStrain:{session['mentalStrain']:.2f}")
+
         analysis = analyse(sessions)
-        print("\n🧠 DRIFT ANALYSIS:")
+        print(f"\n🧠 After {len(sessions)} sessions:")
         print(json.dumps(analysis, indent=2))
-        break
-
-    elif status == "COMPLETE_ERROR":
-        print("❌ Error:", result.get("errorReason"), result.get("errorCode"))
-        break
+        print("─" * 40)
