@@ -37,19 +37,36 @@ def get_trend(sessions, last_n=3):
         return "improving"
     return "stable"
 
+ABSOLUTE_THRESHOLD = 0.75  # if any score is above this, always flag
+DRIFT_THRESHOLD    = 25    # if drift % is above this, flag
+
 def analyse(sessions):
     if len(sessions) < 2:
         return {"message": "Need at least 2 sessions to detect drift"}
+    
     baseline = get_baseline(sessions[:-1])
     current  = sessions[-1]
     drift    = get_drift(current, baseline)
     fields   = ["distress", "stress", "exhaustion", "sleep", "selfEsteem"]
     worst    = max(fields, key=lambda f: abs(current[f] - baseline[f]))
+
+    # ── Check 1: drift from personal baseline ────────────────────────────
+    drift_flag = drift > DRIFT_THRESHOLD
+
+    # ── Check 2: absolute score too high regardless of drift ─────────────
+    absolute_flag = any(current[f] > ABSOLUTE_THRESHOLD for f in fields)
+    
+    # ── Which biomarkers are critically high ─────────────────────────────
+    critical = [f for f in fields if current[f] > ABSOLUTE_THRESHOLD]
+
     return {
-        "drift_score":  drift,
-        "direction":    get_trend(sessions),
-        "worst_signal": worst,
-        "flag":         drift > 25
+        "drift_score":    drift,
+        "direction":      get_trend(sessions),
+        "worst_signal":   worst,
+        "drift_flag":     drift_flag,       # changed a lot from YOUR normal
+        "absolute_flag":  absolute_flag,    # still objectively too high
+        "critical":       critical,         # which ones are critically high
+        "flag":           drift_flag or absolute_flag  # either = alert
     }
 
 def extract_session(result):
